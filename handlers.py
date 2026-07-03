@@ -1,211 +1,257 @@
 import os
 import csv
-from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove, FSInputFile
-from aiogram.filters import CommandStart
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
-from fpdf import FPDF
+from aiogram.fsm.state import StatesGroup, State
+from fpdf import FPDF  # Библиотека fpdf2 из requirements.txt
 
-from states import Registration
 from config import ADMIN_ID
 import database as db
-import keyboards as kb
 
 router = Router()
 
-# Вспомогательный класс для PDF с поддержкой русского языка
-class CyrillicPDF(FPDF):
-    def header(self):
-        # Проверяем стандартный путь к шрифту Arial в Windows
-        font_path = r"C:\Windows\Fonts\arial.ttf"
-        if os.path.exists(font_path):
-            self.add_font("Arial", "", font_path)
-            self.set_font("Arial", size=16)
-        else:
-            self.set_font("Helvetica", size=16)
-        self.cell(0, 10, "Отчет: База данных анкет бота", new_x="LMARGIN", new_y="NEXT", align="C")
-        self.ln(10)
+# ==========================================
+# 📋 СОСТОЯНИЯ ДЛЯ РЕГИСТРАЦИИ (FSM)
+# ==========================================
+class RegistrationStates(StatesGroup):
+    name = State()
+    age = State()
+    description = State()
+    photo = State()
 
+# ==========================================
+# 🛠️ ВСПОМОГАТЕЛЬНЫЕ КЛАССЫ И ФУНКЦИИ
+# ==========================================
+class CyrillicPDF(FPDF):
+    """Кастомный класс для корректной работы PDF с кириллицей"""
+    def header(self):
+        pass
+    def footer(self):
+        pass
+
+def generate_rating_bar(score: float) -> str:
+    """Генерирует визуальную шкалу звезд для рейтинга"""
+    filled_stars = int(round(score))
+    return "⭐" * filled_stars + "⚫" * (5 - filled_stars)
+
+def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    """Генерирует главное меню в зависимости от роли пользователя"""
+    buttons = [
+        [KeyboardButton(text="🔍 Смотреть анкеты")],
+        [KeyboardButton(text="👤 Моя анкета"), KeyboardButton(text="👁️ Скрыть/Показать анкету")]
+    ]
+    # Если пишет админ — добавляем кнопку управления
+    if user_id == ADMIN_ID:
+        buttons.append([KeyboardButton(text="🔧 Панель управления")])
+        
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+# ==========================================
+# 🚀БАЗОВЫЕ КОМАНДЫ И РЕГИСТРАЦИЯ
+# ==========================================
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
-    if not message.from_user.username:
-        await message.answer("⚠️ У тебя не установлен @username в настройках Telegram! Измени это для работы бота.")
-        return
-
     user = await db.get_user(message.from_user.id)
     if user:
-        await message.answer("Добро пожаловать обратно!", reply_markup=kb.get_main_menu(message.from_user.id))
+        await message.answer(f"Привет, {user[2]}! Рад видеть тебя снова.", reply_markup=get_main_keyboard(message.from_user.id))
     else:
-        await message.answer("Привет! Давай создадим твою анкету. Как тебя зовут?")
-        await state.set_state(Registration.waiting_for_name)
+        await message.answer("Привет! Добро пожаловать в бот знакомств. Давай создадим твою анкету.\n\nКак тебя зовут?")
+        await state.set_state(RegistrationStates.name)
 
-# --- ЦЕПОЧКА РЕГИСТРАЦИИ С ОПИСАНИЕМ ---
-
-@router.message(Registration.waiting_for_name)
-async def process_name(message: Message, state: FSMContext):
+@router.message(RegistrationStates.name)
+async def reg_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await message.answer(
-        f"Приятно познакомиться, {message.text}! Расскажи немного о себе (это будет описанием анкеты):",
-        reply_markup=kb.get_skip_description_keyboard()
-    )
-    await state.set_state(Registration.waiting_for_description)
+    await message.answer("Сколько тебе лет?")
+    await state.set_state(RegistrationStates.age)
 
-@router.message(Registration.waiting_for_description)
-async def process_description(message: Message, state: FSMContext):
-    desc = "" if message.text == "Пропустить ➡️" else message.text
-    await state.update_data(description=desc)
-    
-    # Удаляем текстовую клавиатуру, запрашивая фото
-    await message.answer("Отлично! Теперь отправь своё фото:", reply_markup=ReplyKeyboardRemove())
-    await state.set_state(Registration.waiting_for_photo)
-
-@router.message(Registration.waiting_for_photo, F.photo)
-async def process_photo(message: Message, state: FSMContext):
-    photo_id = message.photo[-1].file_id
-    await state.update_data(photo_id=photo_id)
-    await message.answer("И последний шаг — введи свой возраст цифрами:")
-    await state.set_state(Registration.waiting_for_age)
-
-@router.message(Registration.waiting_for_age)
-async def process_age(message: Message, state: FSMContext):
-    if not message.text.isdigit() or not (16 <= int(message.text) <= 100):
-        await message.answer("Пожалуйста, введи реальный возраст цифрами:")
+@router.message(RegistrationStates.age)
+async def reg_age(message: Message, state: FSMContext):
+    if not message.text.isdigit() or not (16 <= int(message.text) <= 99):
+        await message.answer("Пожалуйста, введи корректный возраст цифрами (от 16 до 99):")
         return
-    
-    age = int(message.text)
-    data = await state.get_data()
+    await state.update_data(age=int(message.text))
+    await message.answer("Расскажи немного о себе (твои хобби, интересы):")
+    await state.set_state(RegistrationStates.description)
+
+@router.message(RegistrationStates.description)
+async def reg_desc(message: Message, state: FSMContext):
+    await state.update_data(description=message.text)
+    await message.answer("Пришли своё лучшее фото для анкеты:")
+    await state.set_state(RegistrationStates.photo)
+
+@router.message(RegistrationStates.photo, F.photo)
+async def reg_photo(message: Message, state: FSMContext):
+    photo_id = message.photo[-1].file_id
+    user_data = await state.get_data()
     
     await db.add_user(
         tg_id=message.from_user.id,
-        username=message.from_user.username,
-        name=data['name'],
-        description=data['description'],
-        photo_id=data['photo_id'],
-        age=age
+        username=message.from_user.username or "сокрыт",
+        name=user_data['name'],
+        description=user_data['description'],
+        photo_id=photo_id,
+        age=user_data['age']
     )
     
     await state.clear()
-    await message.answer("Ура! Твоя анкета создана!", reply_markup=kb.get_main_menu(message.from_user.id))
+    await message.answer("✨ Твоя анкета успешно создана и сохранена!", reply_markup=get_main_keyboard(message.from_user.id))
 
-# --- УПРАВЛЕНИЕ СВОИМ ПРОФИЛЕМ ---
-
-@router.message(F.text == "📝 Моя анкета")
-async def my_profile(message: Message):
-    user = await db.get_user(message.from_user.id)
-    if user:
-        # Учитываем смещение индексов: 0:id, 1:username, 2:name, 3:desc, 4:photo, 5:age, 6:active
-        status_text = "🟢 Видна в поиске" if user[6] == 1 else "🔴 Скрыта из поиска"
-        caption = f"Твоя анкетa ({status_text}):\n\n👤 Имя: {user[2]}\n🔥 Возраст: {user[5]}\nНик: @{user[1]}"
-        if user[3]:
-            caption += f"\n📝 Описание: {user[3]}"
-            
-        await message.answer_photo(
-            photo=user[4],
-            caption=caption,
-            reply_markup=kb.get_edit_profile_keyboard(user[6])
-        )
-
-@router.callback_query(F.data == "toggle_visibility")
-async def handle_toggle_visibility(callback: CallbackQuery):
-    await callback.answer()
-    new_status = await db.toggle_visibility(callback.from_user.id)
-    
-    status_str = "теперь видна всем!" if new_status == 1 else "скрыта. Тебя больше никто не увидит, пока ты сам не включишь её."
-    await callback.message.answer(f"Твоя анкета {status_str}")
-    
-    # Удаляем старое сообщение профиля, чтобы обновить кнопки
-    try: await callback.message.delete()
-    except Exception: pass
-
-@router.callback_query(F.data == "edit_profile")
-async def edit_profile_callback(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await callback.message.answer("Давай перепишем анкету. Как тебя зовут?")
-    await state.set_state(Registration.waiting_for_name)
-
-# --- ЛОГИКА ПОИСКА ---
-
-async def send_next_profile(message: Message, bot: Bot, tg_id: int):
-    profile = await db.get_random_profile(tg_id)
+# ==========================================
+# 🔍 ПРОСМОТР АНКЕТ И ОЦЕНКА
+# ==========================================
+async def send_next_profile(message: Message, user_id: int):
+    profile = await db.get_random_profile(user_id)
     if not profile:
-        await bot.send_message(tg_id, "Пока что новых анкет нет. Загляни позже! 😉")
+        await message.answer("Ты посмотрел все доступные аunkеты на сегодня! Загляни позже. 😉")
         return
+
+    p_id, p_username, p_name, p_desc, p_photo, p_age = profile
+    caption = f"🔥 {p_name}, {p_age}\n\n{p_desc}"
     
-    # 0:id, 1:username, 2:name, 3:desc, 4:photo, 5:age
-    caption = f"🔥 {profile[2]}, {profile[5]}"
-    if profile[3]:
-        caption += f"\n\n📝 {profile[3]}"
+    # Кнопки оценки от 1 до 5
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="1️⃣", callback_data=f"rate_{p_id}_1"),
+            InlineKeyboardButton(text="2️⃣", callback_data=f"rate_{p_id}_2"),
+            InlineKeyboardButton(text="3️⃣", callback_data=f"rate_{p_id}_3"),
+            InlineKeyboardButton(text="4️⃣", callback_data=f"rate_{p_id}_4"),
+            InlineKeyboardButton(text="5️⃣", callback_data=f"rate_{p_id}_5")
+        ],
+        [InlineKeyboardButton(text="➡️ Пропустить", callback_data=f"rate_{p_id}_0")]
+    ])
+    
+    await message.answer_photo(photo=p_photo, caption=caption, reply_markup=keyboard)
+
+@router.message(F.text == "🔍 Смотреть анкеты")
+async def start_viewing(message: Message):
+    await send_next_profile(message, message.from_user.id)
+
+@router.callback_query(F.data.startswith("rate_"))
+async def handle_rating(callback: CallbackQuery):
+    _, to_id, score = callback.data.split("_")
+    to_id, score = int(to_id), int(score)
+    
+    # Если нажата оценка (а не кнопка пропустить)
+    if score > 0:
+        await db.save_rating(callback.from_user.id, to_id, score)
         
-    await bot.send_photo(
-        chat_id=tg_id,
-        photo=profile[4],
-        caption=caption,
-        reply_markup=kb.get_rating_keyboard(profile[0])
-    )
+    await callback.answer("Оценка учтена!")
+    await callback.message.delete() # Удаляем старую анкету из чата
+    await send_next_profile(callback.message, callback.from_user.id)
 
-@router.message(F.text == "🔍 Искать анкеты")
-async def start_searching(message: Message, bot: Bot):
-    # Проверим, не скрыл ли пользователь себя. Позволим искать, только если сам активен
+# ==========================================
+# 👤 УПРАВЛЕНИЕ ЛИЧНЫМ ПРОФИЛЕМ
+# ==========================================
+@router.message(F.text == "👤 Моя анкета")
+async def show_my_profile(message: Message):
     user = await db.get_user(message.from_user.id)
-    if user and user[6] == 0:
-        await message.answer("⚠️ Твоя анкета сейчас скрыта. Включи её в меню '📝 Моя анкета', чтобы начать поиск!")
+    if not user:
+        await message.answer("Твоя анкета не найдена. Напиши /start для регистрации.")
         return
-    await send_next_profile(message, bot, message.from_user.id)
-
-@router.callback_query(F.data.startswith("rate:"))
-async def handle_rating(callback: CallbackQuery, bot: Bot):
-    _, score_str, target_id_str = callback.data.split(":")
-    score, target_id, from_id = int(score_str), int(target_id_str), callback.from_user.id
+        
+    # Структура кортежа из БД: 0:tg_id, 1:username, 2:name, 3:desc, 4:photo_id, 5:age, 6:is_active
+    status = "🟢 Видима для всех" if user[6] == 1 else "🔴 Скрыта от остальных"
+    caption = f"👤 **Твой профиль:**\n\nИмя: {user[2]}, {user[5]}\nО себе: {user[3]}\nСтатус: {status}"
     
-    await db.save_rating(from_id, target_id, score)
-    await callback.answer(f"Оценка {score} отправлена!")
-    
-    try: await callback.message.delete()
-    except Exception: pass
-    
-    if score > 5:
-        sender = await db.get_user(from_id)
-        sender_name = sender[2] if sender else "Кто-то"
-        try:
-            await bot.send_message(
-                chat_id=target_id,
-                text=f"🔥 Твоя анкета понравилась пользователю {sender_name}! Оценка: {score}/10\n"
-                     f"Ссылка для связи: @{callback.from_user.username}"
-            )
-        except Exception: pass
-            
-    await send_next_profile(callback.message, bot, from_id)
+    await message.answer_photo(photo=user[4], caption=caption, parse_mode="Markdown")
 
-# --- ПАНЕЛЬ АДМИНИСТРАТОРА (СТРОГАЯ ПРОВЕРКА ПО ID) ---
+@router.message(F.text == "👁️ Скрыть/Показать анкету")
+async def toggle_profile_visibility(message: Message):
+    new_status = await db.toggle_visibility(message.from_user.id)
+    if new_status == 1:
+        await message.answer("🟢 Твоя анкета снова активна и участвует в поиске!")
+    else:
+        await message.answer("🔴 Твоя анкета успешно скрыта. Тебя больше никто не увидит.")
 
-@router.message(F.text == "👑 Панель Админа")
+@router.message(F.text == "⬅️ Назад в меню")
+async def back_to_menu(message: Message):
+    await message.answer("Возвращаемся в главное меню.", reply_markup=get_main_keyboard(message.from_user.id))
+
+
+# ==========================================
+# 👑 АДМИНИСТРАТИВНАЯ ПАНЕЛЬ (Только для ADMIN_ID)
+# ==========================================
+@router.message(F.text == "🔧 Панель управления")
 async def admin_panel(message: Message):
     if message.from_user.id != ADMIN_ID: return
-    await message.answer("Режим администратора активирован.", reply_markup=kb.get_admin_menu())
-
-@router.message(F.text == "🔙 Главное меню")
-async def back_to_main(message: Message):
-    await message.answer("Возвращаемся в меню.", reply_markup=kb.get_main_menu(message.from_user.id))
-
-@router.message(F.text == "📊 Статистика и метрики")
-async def admin_metrics(message: Message):
-    if message.from_user.id != ADMIN_ID: return
-    total, active, ratings = await db.get_admin_stats()
     
-    await message.answer(
-        f"📊 **Метрики бота на текущий момент:**\n\n"
-        f"👥 Всего анкет в системе: {total}\n"
-        f"🟢 Из них активны (видны): {active}\n"
-        f"💤 Из них скрыты: {total - active}\n"
-        f"⭐ Всего выставлено оценок: {ratings}"
+    is_enabled = await db.is_bot_enabled()
+    status_text = "🟢 Бот запущен" if is_enabled else "🔴 Бот выключен (Тех. работы)"
+    toggle_btn_text = "🛑 Выключить бота" if is_enabled else "✅ Включить бота"
+    
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🏆 ТОП-5 Анкет"), KeyboardButton(text="📊 Общая статистика")],
+            [KeyboardButton(text="📥 Выгрузка таблицы (CSV)"), KeyboardButton(text="📄 Экспорт всех анкет в PDF")],
+            [KeyboardButton(text=toggle_btn_text)],
+            [KeyboardButton(text="⬅️ Назад в меню")]
+        ],
+        resize_keyboard=True
     )
+    await message.answer(f"Добро пожаловать в админку!\nТекущий статус: **{status_text}**", reply_markup=kb)
 
+@router.message(F.text.in_({"🛑 Выключить бота", "✅ Включить бота"}))
+async def handle_toggle_bot(message: Message):
+    if message.from_user.id != ADMIN_ID: return
+    
+    new_status = await db.toggle_bot_status()
+    if new_status:
+        await message.answer("✅ Бот успешно **включен** для всех пользователей!")
+    else:
+        await message.answer("🛑 Бот **выключен** для всех (включен режим тех. работ).")
+        
+    await admin_panel(message)
+
+@router.message(F.text == "📊 Общая статистика")
+async def show_admin_stats(message: Message):
+    if message.from_user.id != ADMIN_ID: return
+    
+    total, active, ratings = await db.get_admin_stats()
+    text = (
+        "📊 **АНАЛИТИКА СИСТЕМЫ**\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        f"👥 Всего анкет в базе: `{total}`\n"
+        f"🟢 Активных (видимых): `{active}`\n"
+        f"💤 Скрытых профилей: `{total - active}`\n"
+        f"⭐ Всего выставлено оценок: `{ratings}`\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
+@router.message(F.text == "🏆 ТОП-5 Анкет")
+async def show_top_ratings(message: Message):
+    if message.from_user.id != ADMIN_ID: return
+    
+    top_profiles = await db.get_top_rated_profiles(limit=5)
+    if not top_profiles:
+        await message.answer("Пока никто не оценил ни одну анкету. Рейтинг пуст! 🤷‍♂️")
+        return
+        
+    response = "🏆 **РЕЙТИНГ ЛУЧШИХ АНКЕТ БОТА** 🏆\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    
+    for idx, profile in enumerate(top_profiles):
+        name, age, username, avg_score, votes = profile
+        username_link = f"@{username}" if username and username != "сокрыт" else "нет юзернейма"
+        bar = generate_rating_bar(avg_score)
+        
+        response += f"{medals[idx]} **{name}, {age}** ({username_link})\n"
+        response += f"┣ Средний балл: `{avg_score:.2f}` из 5\n"
+        response += f"┣ Визуально: {bar}\n"
+        response += f"┗ Всего голосов: `{votes}`\n\n"
+        
+    response += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n*Рейтинг обновляется автоматически.*"
+    await message.answer(response, parse_mode="Markdown")
+
+# ==========================================
+# 📥 ЭКСПОРТ ДАННЫХ (БЕЗОПАСНО ДЛЯ PERSISTENCEMOUNT)
+# ==========================================
 @router.message(F.text == "📥 Выгрузка таблицы (CSV)")
 async def admin_export_csv(message: Message):
     if message.from_user.id != ADMIN_ID: return
     
     users = await db.get_all_users()
-    filename = "/data/users_export.csv"  # 🔥 Пишем строго в persistenceMount
+    filename = "/data/users_export.csv"  # Пишем строго в постоянную папку
     
     with open(filename, mode="w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f, delimiter=";")
@@ -214,43 +260,38 @@ async def admin_export_csv(message: Message):
             writer.writerow(u)
             
     await message.answer_document(document=FSInputFile(filename), caption="📊 Таблица всех пользователей выгружена!")
-    
-    # Безопасное удаление временного файла
-    if os.path.exists(filename):
-        os.remove(filename)
+    if os.path.exists(filename): os.remove(filename)
 
 @router.message(F.text == "📄 Экспорт всех анкет в PDF")
 async def admin_export_pdf(message: Message):
     if message.from_user.id != ADMIN_ID: return
     
-    await message.answer("Генерирую PDF-отчет, это может занять пару секунд...")
+    await message.answer("Генерирую PDF-отчет...")
     users = await db.get_all_users()
     
     pdf = CyrillicPDF()
     pdf.add_page()
     
-    font_path = r"C:\Windows\Fonts\arial.ttf"
+    # 🌟 На Amvera (Linux) нет стандартных шрифтов Windows.
+    # Если ты загрузишь шрифт arial.ttf прямо в корневую папку проекта, код подтянет его.
+    font_path = "arial.ttf"
     if os.path.exists(font_path):
-        pdf.add_font("Arial", "", font_path)
+        pdf.add_font("Arial", "", font_path, uni=True)
         pdf.set_font("Arial", size=11)
     else:
-        pdf.set_font("Helvetica", size=11)
+        pdf.set_font("Helvetica", size=11) # Английский будет работать, русский без шрифта может превратиться в кракозябры
 
     for u in users:
         tg_id, username, name, desc, age, active = u
         act_str = "Активен" if active == 1 else "Скрыт"
-        text_block = f"ID: {tg_id} | @{username} | {name}, {age} л. ({act_str})\n"
-        if desc:
-            text_block += f"Описание: {desc}\n"
+        text_block = f"ID: {tg_id} | @{username} | {name}, {age} y.o. ({act_str})\n"
+        if desc: text_block += f"Bio: {desc}\n"
         text_block += "-" * 50 + "\n"
         pdf.multi_cell(0, 7, text_block)
         pdf.ln(2)
         
-    filename = "/data/profiles_report.pdf"  # 🔥 Пишем строго в persistenceMount
+    filename = "/data/profiles_report.pdf"
     pdf.output(filename)
     
     await message.answer_document(document=FSInputFile(filename), caption="📄 PDF-отчет со всеми анкетами готов!")
-    
-    # Безопасное удаление временного файла
-    if os.path.exists(filename):
-        os.remove(filename)
+    if os.path.exists(filename): os.remove(filename)
