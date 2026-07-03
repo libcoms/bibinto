@@ -7,6 +7,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from fpdf import FPDF
 
 from config import ADMIN_ID
@@ -33,13 +34,14 @@ class CyrillicPDF(FPDF):
         pass
 
 def generate_rating_bar(score: float) -> str:
+    # Ограничиваем максимум 10 звездами
     filled_stars = int(round(score))
-    return "⭐" * filled_stars + "⚫" * (5 - filled_stars)
+    return "⭐" * filled_stars + "⚫" * (10 - filled_stars)
 
 def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     buttons = [
-        [KeyboardButton(text="🔍 Смотреть анкеты")],
-        [KeyboardButton(text="👤 Моя анкета"), KeyboardButton(text="👁️ Скрыть/Показать анкету")]
+        [KeyboardButton(text="🔍 Смотреть анкеты"), KeyboardButton(text="🏆 ТОП анкет")],
+        [KeyboardButton(text="👤 Моя анкета")]
     ]
     if user_id == ADMIN_ID:
         buttons.append([KeyboardButton(text="🔧 Панель управления")])
@@ -94,10 +96,10 @@ async def reg_photo(message: Message, state: FSMContext):
     )
     
     await state.clear()
-    await message.answer("✨ Твоя анкета успешно создана и сохранена!", reply_markup=get_main_keyboard(message.from_user.id))
+    await message.answer("✨ Твоя анкета успешно сохранена!", reply_markup=get_main_keyboard(message.from_user.id))
 
 # ==========================================
-# 🔍 ПРОСМОТР АНКЕТ И ОЦЕНКА
+# 🔍 ПРОСМОТР АНКЕТ И ОЦЕНКА (10 БАЛЛОВ)
 # ==========================================
 async def send_next_profile(message: Message, user_id: int):
     profile = await db.get_random_profile(user_id)
@@ -110,24 +112,22 @@ async def send_next_profile(message: Message, user_id: int):
     safe_name = html.escape(str(p_name))
     safe_desc = html.escape(str(p_desc))
     
-    # 💎 PREMIUM-метка при просмотре анкеты разработчика (HTML разметка)
     if p_id == ADMIN_ID:
         caption = f"👑 <b>PREMIUM PROFILE</b> 👑\n🔥 {safe_name}, {p_age} [Разработчик]\n\n{safe_desc}"
     else:
         caption = f"🔥 {safe_name}, {p_age}\n\n{safe_desc}"
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="1️⃣", callback_data=f"rate_{p_id}_1"),
-            InlineKeyboardButton(text="2️⃣", callback_data=f"rate_{p_id}_2"),
-            InlineKeyboardButton(text="3️⃣", callback_data=f"rate_{p_id}_3"),
-            InlineKeyboardButton(text="4️⃣", callback_data=f"rate_{p_id}_4"),
-            InlineKeyboardButton(text="5️⃣", callback_data=f"rate_{p_id}_5")
-        ],
-        [InlineKeyboardButton(text="➡️ Пропустить", callback_data=f"rate_{p_id}_0")]
-    ])
+    # Строим 10-балльную клавиатуру (2 ряда по 5 кнопок) + кнопка пропуска
+    builder = InlineKeyboardBuilder()
+    for i in range(1, 11):
+        builder.button(text=str(i), callback_data=f"rate_{p_id}_{i}")
+    builder.adjust(5, 5)
     
-    await message.answer_photo(photo=p_photo, caption=caption, reply_markup=keyboard, parse_mode="HTML")
+    # Добавляем кнопку "Пропустить" отдельной строкой
+    inline_kb = builder.as_markup()
+    inline_kb.inline_keyboard.append([InlineKeyboardButton(text="➡️ Пропустить", callback_data=f"rate_{p_id}_0")])
+    
+    await message.answer_photo(photo=p_photo, caption=caption, reply_markup=inline_kb, parse_mode="HTML")
 
 @router.message(F.text == "🔍 Смотреть анкеты")
 async def start_viewing(message: Message):
@@ -151,7 +151,7 @@ async def handle_rating(callback: CallbackQuery):
     await send_next_profile(callback.message, callback.from_user.id)
 
 # ==========================================
-# 👤 УПРАВЛЕНИЕ ЛИЧНЫМ ПРОФИЛЕМ
+# 👤 УПРАВЛЕНИЕ ЛИЧНЫМ ПРОФИЛЕМ (РЕДАКТИРОВАНИЕ)
 # ==========================================
 @router.message(F.text == "👤 Моя анкета")
 async def show_my_profile(message: Message):
@@ -164,25 +164,80 @@ async def show_my_profile(message: Message):
     safe_name = html.escape(str(user[2]))
     safe_desc = html.escape(str(user[3]))
     
-    # 💎 PREMIUM-метка в личном кабинете
     if user[0] == ADMIN_ID:
         caption = f"👑 <b>Твой профиль (PREMIUM DEVELOPER):</b>\n\nИмя: {safe_name}, {user[5]}\nО себе: {safe_desc}\nСтатус: {status}"
     else:
         caption = f"👤 <b>Твой профиль:</b>\n\nИмя: {safe_name}, {user[5]}\nО себе: {safe_desc}\nСтатус: {status}"
     
-    await message.answer_photo(photo=user[4], caption=caption, parse_mode="HTML")
+    # Создаем инлайн-кнопки под анкетой
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚙️ Изменить анкету", callback_data="profile_edit")],
+        [InlineKeyboardButton(text="👁️ Скрыть/Показать анкету", callback_data="profile_toggle")]
+    ])
+    
+    await message.answer_photo(photo=user[4], caption=caption, reply_markup=kb, parse_mode="HTML")
 
-@router.message(F.text == "👁️ Скрыть/Показать анкету")
-async def toggle_profile_visibility(message: Message):
-    new_status = await db.toggle_visibility(message.from_user.id)
-    if new_status == 1:
-        await message.answer("🟢 Твоя анкета снова активна и участвует в поиске!")
-    else:
-        await message.answer("🔴 Твоя анкета успешно скрыта. Тебя больше никто не увидит.")
+@router.callback_query(F.data == "profile_edit")
+async def edit_profile_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.message.delete()
+    await callback.message.answer("Давай обновим твою анкету! Как тебя зовут?")
+    await state.set_state(RegistrationStates.name)
+    await callback.answer()
+
+@router.callback_query(F.data == "profile_toggle")
+async def toggle_profile_callback(callback: CallbackQuery):
+    new_status = await db.toggle_visibility(callback.from_user.id)
+    status_text = "🟢 Твоя анкета снова активна!" if new_status == 1 else "🔴 Твоя анкета успешно скрыта."
+    
+    await callback.answer(status_text, show_alert=True)
+    
+    # Обновляем профиль на экране, чтобы статус визуально поменялся
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+    # Перевызываем функцию отображения
+    # Имитируем объект Message для переиспользования функции
+    callback.message.from_user = callback.from_user 
+    await show_my_profile(callback.message)
 
 @router.message(F.text == "⬅️ Назад в меню")
 async def back_to_menu(message: Message):
     await message.answer("Возвращаемся в главное меню.", reply_markup=get_main_keyboard(message.from_user.id))
+
+# ==========================================
+# 🏆 ПРОСМОТР РЕЙТИНГА АНКЕТ (ОБЩИЙ ДОСТУП)
+# ==========================================
+@router.message(F.text.in_({"🏆 ТОП анкет", "🏆 ТОП-5 Анкет"}))
+async def show_top_ratings(message: Message):
+    top_profiles = await db.get_top_rated_profiles(limit=5)
+    if not top_profiles:
+        await message.answer("Пока никто не оценил ни одну анкету. Рейтинг пуст! 🤷‍♂️")
+        return
+        
+    response = "🏆 <b>РЕЙТИНГ ЛУЧШИХ АНКЕТ БОТА</b> 🏆\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    
+    for idx, profile in enumerate(top_profiles):
+        tg_id, name, age, username, avg_score, votes = profile
+        username_link = f"@{username}" if username and username != "сокрыт" else "нет юзернейма"
+        
+        safe_name = html.escape(str(name))
+        safe_username = html.escape(str(username_link))
+        bar = generate_rating_bar(avg_score)
+        
+        if tg_id == ADMIN_ID:
+            premium_tag = " ✨ [⚡ PREMIUM]"
+            response += f"{medals[idx]} <b>{safe_name}, {age}</b>{premium_tag} ({safe_username})\n"
+        else:
+            response += f"{medals[idx]} <b>{safe_name}, {age}</b> ({safe_username})\n"
+            
+        response += f"┣ Средний балл: <code>{avg_score:.2f}</code> из 10\n"
+        response += f"┣ Визуально: {bar}\n"
+        response += f"┗ Всего голосов: <code>{votes}</code>\n\n"
+        
+    response += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n*<i>Рейтинг использует умную систему взвешивания оценок.</i>"
+    await message.answer(response, parse_mode="HTML")
 
 # ==========================================
 # 👑 АДМИНИСТРАТИВНАЯ ПАНЕЛЬ
@@ -232,41 +287,6 @@ async def show_admin_stats(message: Message):
     )
     await message.answer(text, parse_mode="HTML")
 
-@router.message(F.text == "🏆 ТОП-5 Анкет")
-async def show_top_ratings(message: Message):
-    if message.from_user.id != ADMIN_ID: return
-    
-    top_profiles = await db.get_top_rated_profiles(limit=5)
-    if not top_profiles:
-        await message.answer("Пока никто не оценил ни одну анкету. Рейтинг пуст! 🤷‍♂️")
-        return
-        
-    response = "🏆 <b>РЕЙТИНГ ЛУЧШИХ АНКЕТ БОТА</b> 🏆\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
-    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-    
-    for idx, profile in enumerate(top_profiles):
-        tg_id, name, age, username, avg_score, votes = profile
-        username_link = f"@{username}" if username and username != "сокрыт" else "нет юзернейма"
-        
-        # Полное экранирование данных пользователей от ошибок парсинга
-        safe_name = html.escape(str(name))
-        safe_username = html.escape(str(username_link))
-        bar = generate_rating_bar(avg_score)
-        
-        # 💎 PREMIUM-метка в ТОП-5 (теперь внутри HTML-безопасных строк)
-        if tg_id == ADMIN_ID:
-            premium_tag = " ✨ [⚡ PREMIUM]"
-            response += f"{medals[idx]} <b>{safe_name}, {age}</b>{premium_tag} ({safe_username})\n"
-        else:
-            response += f"{medals[idx]} <b>{safe_name}, {age}</b> ({safe_username})\n"
-            
-        response += f"┣ Средний балл: <code>{avg_score:.2f}</code> из 5\n"
-        response += f"┣ Визуально: {bar}\n"
-        response += f"┗ Всего голосов: <code>{votes}</code>\n\n"
-        
-    response += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n*<i>Рейтинг использует умную систему взвешивания оценок.</i>"
-    await message.answer(response, parse_mode="HTML")
-
 # ==========================================
 # 📥 ЭКСПОРТ ДАННЫХ
 # ==========================================
@@ -275,7 +295,7 @@ async def admin_export_csv(message: Message):
     if message.from_user.id != ADMIN_ID: return
     
     users = await db.get_all_users()
-    filename = "/data/users_export.csv"
+    filename = "users_export.csv"
     
     with open(filename, mode="w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f, delimiter=";")
@@ -312,7 +332,7 @@ async def admin_export_pdf(message: Message):
         pdf.multi_cell(0, 7, text_block)
         pdf.ln(2)
         
-    filename = "/data/profiles_report.pdf"
+    filename = "profiles_report.pdf"
     pdf.output(filename)
     
     await message.answer_document(document=FSInputFile(filename), caption="📄 PDF-отчет со всеми анкетами готов!")
