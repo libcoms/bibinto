@@ -3,11 +3,12 @@ import aiosqlite
 from config import DB_NAME
 
 async def init_db():
-    # 🔥 Автоматически создаем папку для БД, если её нет (например, при локальных тестах)
+    # 1. Проверяем и создаем папку для базы данных (/data)
     db_dir = os.path.dirname(DB_NAME)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
 
+    # 2. Открываем АКТИВНОЕ соединение через `async with`
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
@@ -15,11 +16,13 @@ async def init_db():
                 username TEXT,
                 name TEXT,
                 description TEXT,
-                photo_id TEXT,
                 age INTEGER,
                 is_active INTEGER DEFAULT 1
             )
         ''')
+        # После выполнения SQL-запросов, меняющих структуру или данные, 
+        # обязательно делаем commit, чтобы сохранить изменения
+        await db.commit()
     await db.execute('''
         CREATE TABLE IF NOT EXISTS ratings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
