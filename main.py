@@ -1,30 +1,23 @@
 import asyncio
-import aiohttp
 from aiogram import Bot, Dispatcher
-from aiogram.client.session.aiohttp import AiohttpSession
-
 from config import BOT_TOKEN
 from database import init_db
 from handlers import router as main_router
 from middlewares import MaintenanceMiddleware
 
 async def main():
-    # 🌟 1. СНАЧАЛА ИНИЦИАЛИЗИРУЕМ БАЗУ ДАННЫХ И МИГРАЦИИ
-    # Это гарантирует, что все таблицы и новые колонки создадутся до первого сообщения
+    # 1. Сначала инициализируем базу данных и миграции
     await init_db()
     
-    # 🌐 2. НАСТРАИВАЕМ СЕТЕВУЮ СЕССИЮ С УВЕЛИЧЕННЫМИ ТАЙМ-АУТАМИ
-    # Защищает от сетевых сбоев TelegramNetworkError на хостинге
-    session = AiohttpSession(timeout=aiohttp.ClientTimeout(total=40, connect=15))
-    bot = Bot(token=BOT_TOKEN, session=session)
+    # 2. Инициализируем бота стандартным, безопасным способом
+    bot = Bot(token=BOT_TOKEN)
     
     dp = Dispatcher()
     
-    # 🛡️ 3. РЕГИСТРИРУЕМ ВЫШИБАЛУ (MIDDLEWARE)
-    # Важно зарегистрировать его как outer, чтобы он проверял входящие запросы первее всех
+    # 3. Регистрируем middleware для режима тех. работ
     dp.message.outer_middleware(MaintenanceMiddleware())
     
-    # 📥 4. ПОДКЛЮЧАЕМ ОБРАБОТЧИКИ КОМАНД И КНОПОК
+    # 4. Подключаем обработчики команд и кнопок
     dp.include_router(main_router)
     
     print("Бот успешно запущен и готов к работе!")
