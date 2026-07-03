@@ -5,7 +5,7 @@ from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardB
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.exceptions import TelegramBadRequest  # 🛡️ Импортируем защиту от ошибок Telegram
+from aiogram.exceptions import TelegramBadRequest
 from fpdf import FPDF
 
 from config import ADMIN_ID
@@ -26,19 +26,16 @@ class RegistrationStates(StatesGroup):
 # 🛠️ ВСПОМОГАТЕЛЬНЫЕ КЛАССЫ И ФУНКЦИИ
 # ==========================================
 class CyrillicPDF(FPDF):
-    """Кастомный класс для корректной работы PDF с кириллицей"""
     def header(self):
         pass
     def footer(self):
         pass
 
 def generate_rating_bar(score: float) -> str:
-    """Генерирует визуальную шкалу звезд для рейтинга"""
     filled_stars = int(round(score))
     return "⭐" * filled_stars + "⚫" * (5 - filled_stars)
 
 def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
-    """Генерирует главное меню в зависимости от роли пользователя"""
     buttons = [
         [KeyboardButton(text="🔍 Смотреть анкеты")],
         [KeyboardButton(text="👤 Моя анкета"), KeyboardButton(text="👁️ Скрыть/Показать анкету")]
@@ -108,7 +105,12 @@ async def send_next_profile(message: Message, user_id: int):
         return
 
     p_id, p_username, p_name, p_desc, p_photo, p_age = profile
-    caption = f"🔥 {p_name}, {p_age}\n\n{p_desc}"
+    
+    # 💎 ЭКСКЛЮЗИВНАЯ ПОМЕТКА: Когда другие смотрят анкету админа
+    if p_id == ADMIN_ID:
+        caption = f"👑 **PREMIUM PROFILE** 👑\n🔥 {p_name}, {p_age} [Разработчик]\n\n{p_desc}"
+    else:
+        caption = f"🔥 {p_name}, {p_age}\n\n{p_desc}"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -137,11 +139,9 @@ async def handle_rating(callback: CallbackQuery):
         
     await callback.answer("Оценка учтена!")
     
-    # 🛡️ Безопасное удаление старой анкеты с защитой от двойного клика
     try:
         await callback.message.delete()
     except TelegramBadRequest:
-        # Если сообщение уже удалено предыдущим кликом — просто игнорируем ошибку
         pass
         
     await send_next_profile(callback.message, callback.from_user.id)
@@ -157,7 +157,12 @@ async def show_my_profile(message: Message):
         return
         
     status = "🟢 Видима для всех" if user[6] == 1 else "🔴 Скрыта от остальных"
-    caption = f"👤 **Твой профиль:**\n\nИмя: {user[2]}, {user[5]}\nО себе: {user[3]}\nСтатус: {status}"
+    
+    # 💎 ЭКСКЛЮЗИВНАЯ ПОМЕТКА: Отображение личного кабинета админа
+    if user[0] == ADMIN_ID:
+        caption = f"👑 **Твой профиль (PREMIUM DEVELOPER):**\n\nИмя: {user[2]}, {user[5]}\nО себе: {user[3]}\nСтатус: {status}"
+    else:
+        caption = f"👤 **Твой профиль:**\n\nИмя: {user[2]}, {user[5]}\nО себе: {user[3]}\nСтатус: {status}"
     
     await message.answer_photo(photo=user[4], caption=caption, parse_mode="Markdown")
 
@@ -234,16 +239,22 @@ async def show_top_ratings(message: Message):
     medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
     
     for idx, profile in enumerate(top_profiles):
-        name, age, username, avg_score, votes = profile
+        tg_id, name, age, username, avg_score, votes = profile
         username_link = f"@{username}" if username and username != "сокрыт" else "нет юзернейма"
         bar = generate_rating_bar(avg_score)
         
-        response += f"{medals[idx]} **{name}, {age}** ({username_link})\n"
+        # 💎 ЭКСКЛЮЗИВНАЯ ПОМЕТКА: Внутри списка ТОП-5
+        if tg_id == ADMIN_ID:
+            premium_tag = " ✨ [⚡ PREMIUM]"
+            response += f"{medals[idx]} **{name}, {age}**{premium_tag} ({username_link})\n"
+        else:
+            response += f"{medals[idx]} **{name}, {age}** ({username_link})\n"
+            
         response += f"┣ Средний балл: `{avg_score:.2f}` из 5\n"
         response += f"┣ Визуально: {bar}\n"
         response += f"┗ Всего голосов: `{votes}`\n\n"
         
-    response += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n*Рейтинг обновляется автоматически.*"
+    response += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n*Рейтинг использует умную систему взвешивания оценок.*"
     await message.answer(response, parse_mode="Markdown")
 
 # ==========================================

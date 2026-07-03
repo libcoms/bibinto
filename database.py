@@ -9,7 +9,6 @@ async def init_db():
         os.makedirs(db_dir, exist_ok=True)
 
     async with aiosqlite.connect(DB_NAME) as db:
-        # 1. Создаем таблицу пользователей (если её не было)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id INTEGER PRIMARY KEY,
@@ -22,7 +21,6 @@ async def init_db():
             )
         ''')
         
-        # 2. Создаем таблицу оценок (если её не было)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS ratings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,7 +31,6 @@ async def init_db():
             )
         ''')
         
-        # 3. Создаем таблицу системных настроек для рубильника
         await db.execute('''
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -41,19 +38,13 @@ async def init_db():
             )
         ''')
         
-        # Задаем статус "Бот включен" по умолчанию при самом первом создании таблицы
         await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('bot_enabled', '1')")
         await db.commit()
 
-        # 🔥 АВТОМАТИЧЕСКАЯ МИГРАЦИЯ ДАННЫХ
-        # Если база старая и в ней физически нет колонки photo_id, мы её аккуратно добавляем,
-        # не повреждая уже существующие строки с именами и возрастами.
         try:
             await db.execute("ALTER TABLE users ADD COLUMN photo_id TEXT")
             await db.commit()
-            print("Миграция: колонка photo_id успешно добавлена в старую базу данных.")
         except aiosqlite.OperationalError:
-            # Ошибка возникает, если колонка уже существует. Просто идем дальше.
             pass
 
 # ==========================================
@@ -111,14 +102,12 @@ async def save_rating(from_id: int, to_id: int, score: int):
 # ==========================================
 
 async def is_bot_enabled() -> bool:
-    """Проверяет глобальный статус работы бота с защитой от падения при первом запуске"""
     try:
         async with aiosqlite.connect(DB_NAME) as db:
             async with db.execute("SELECT value FROM settings WHERE key = 'bot_enabled'") as cursor:
                 res = await cursor.fetchone()
                 return res[0] == '1' if res else True
     except aiosqlite.OperationalError:
-        # Если таблицы временно нет из-за параллельных процессов, считаем, что бот включен
         return True
 
 async def toggle_bot_status() -> bool:
@@ -133,13 +122,17 @@ async def toggle_bot_status() -> bool:
         return new_status == '1'
 
 async def get_top_rated_profiles(limit: int = 5):
+    """
+    Возвращает список лучших анкет по взвешенному рейтингу (Байесовское среднее).
+    Формула сглаживания отсекает профили с 1-2 случайными лайками на верхних позициях.
+    """
     async with aiosqlite.connect(DB_NAME) as db:
         query = '''
-            SELECT u.name, u.age, u.username, AVG(r.score) as avg_score, COUNT(r.score) as votes_count
+            SELECT u.telegram_id, u.name, u.age, u.username, AVG(r.score) as avg_score, COUNT(r.score) as votes_count
             FROM users u
             INNER JOIN ratings r ON u.telegram_id = r.to_user_id
             GROUP BY u.telegram_id
-            ORDER BY avg_score DESC, votes_count DESC
+            ORDER BY (SUM(r.score) + 12.0) / (COUNT(r.score) + 4) DESC, votes_count DESC
             LIMIT ?
         '''
         async with db.execute(query, (limit,)) as cursor:
