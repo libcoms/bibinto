@@ -1,5 +1,6 @@
 import os
 import csv
+import html  # 🛡️ Импортируем модуль для безопасного экранирования текста пользователей
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.filters import CommandStart, Command
@@ -52,7 +53,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
 async def cmd_start(message: Message, state: FSMContext):
     user = await db.get_user(message.from_user.id)
     if user:
-        await message.answer(f"Привет, {user[2]}! Рад видеть тебя снова.", reply_markup=get_main_keyboard(message.from_user.id))
+        await message.answer(f"Привет, {html.escape(user[2])}! Рад видеть тебя снова.", reply_markup=get_main_keyboard(message.from_user.id))
     else:
         await message.answer("Привет! Добро пожаловать в бот знакомств. Давай создадим твою анкету.\n\nКак тебя зовут?")
         await state.set_state(RegistrationStates.name)
@@ -106,11 +107,14 @@ async def send_next_profile(message: Message, user_id: int):
 
     p_id, p_username, p_name, p_desc, p_photo, p_age = profile
     
-    # 💎 ЭКСКЛЮЗИВНАЯ ПОМЕТКА: Когда другие смотрят анкету админа
+    safe_name = html.escape(str(p_name))
+    safe_desc = html.escape(str(p_desc))
+    
+    # 💎 PREMIUM-метка при просмотре анкеты разработчика (HTML разметка)
     if p_id == ADMIN_ID:
-        caption = f"👑 **PREMIUM PROFILE** 👑\n🔥 {p_name}, {p_age} [Разработчик]\n\n{p_desc}"
+        caption = f"👑 <b>PREMIUM PROFILE</b> 👑\n🔥 {safe_name}, {p_age} [Разработчик]\n\n{safe_desc}"
     else:
-        caption = f"🔥 {p_name}, {p_age}\n\n{p_desc}"
+        caption = f"🔥 {safe_name}, {p_age}\n\n{safe_desc}"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -123,7 +127,7 @@ async def send_next_profile(message: Message, user_id: int):
         [InlineKeyboardButton(text="➡️ Пропустить", callback_data=f"rate_{p_id}_0")]
     ])
     
-    await message.answer_photo(photo=p_photo, caption=caption, reply_markup=keyboard)
+    await message.answer_photo(photo=p_photo, caption=caption, reply_markup=keyboard, parse_mode="HTML")
 
 @router.message(F.text == "🔍 Смотреть анкеты")
 async def start_viewing(message: Message):
@@ -157,14 +161,16 @@ async def show_my_profile(message: Message):
         return
         
     status = "🟢 Видима для всех" if user[6] == 1 else "🔴 Скрыта от остальных"
+    safe_name = html.escape(str(user[2]))
+    safe_desc = html.escape(str(user[3]))
     
-    # 💎 ЭКСКЛЮЗИВНАЯ ПОМЕТКА: Отображение личного кабинета админа
+    # 💎 PREMIUM-метка в личном кабинете
     if user[0] == ADMIN_ID:
-        caption = f"👑 **Твой профиль (PREMIUM DEVELOPER):**\n\nИмя: {user[2]}, {user[5]}\nО себе: {user[3]}\nСтатус: {status}"
+        caption = f"👑 <b>Твой профиль (PREMIUM DEVELOPER):</b>\n\nИмя: {safe_name}, {user[5]}\nО себе: {safe_desc}\nСтатус: {status}"
     else:
-        caption = f"👤 **Твой профиль:**\n\nИмя: {user[2]}, {user[5]}\nО себе: {user[3]}\nСтатус: {status}"
+        caption = f"👤 <b>Твой профиль:</b>\n\nИмя: {safe_name}, {user[5]}\nО себе: {safe_desc}\nСтатус: {status}"
     
-    await message.answer_photo(photo=user[4], caption=caption, parse_mode="Markdown")
+    await message.answer_photo(photo=user[4], caption=caption, parse_mode="HTML")
 
 @router.message(F.text == "👁️ Скрыть/Показать анкету")
 async def toggle_profile_visibility(message: Message):
@@ -198,7 +204,7 @@ async def admin_panel(message: Message):
         ],
         resize_keyboard=True
     )
-    await message.answer(f"Добро пожаловать в админку!\nТекущий статус: **{status_text}**", reply_markup=kb)
+    await message.answer(f"Добро пожаловать в админку!\nТекущий статус: <b>{status_text}</b>", reply_markup=kb, parse_mode="HTML")
 
 @router.message(F.text.in_({"🛑 Выключить бота", "✅ Включить бота"}))
 async def handle_toggle_bot(message: Message):
@@ -218,13 +224,13 @@ async def show_admin_stats(message: Message):
     
     total, active, ratings = await db.get_admin_stats()
     text = (
-        "📊 **АНАЛИТИКА СИСТЕМЫ**\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"👥 Всего анкет в базе: `{total}`\n"
-        f"🟢 Активных (видимых): `{active}`\n"
-        f"💤 Скрытых профилей: `{total - active}`\n"
-        f"⭐ Всего выставлено оценок: `{ratings}`\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
+        "📊 <b>АНАЛИТИКА СИСТЕМЫ</b>\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        f"👥 Всего анкет в базе: <code>{total}</code>\n"
+        f"🟢 Активных (видимых): <code>{active}</code>\n"
+        f"💤 Скрытых профилей: <code>{total - active}</code>\n"
+        f"⭐ Всего выставлено оценок: <code>{ratings}</code>\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
     )
-    await message.answer(text, parse_mode="Markdown")
+    await message.answer(text, parse_mode="HTML")
 
 @router.message(F.text == "🏆 ТОП-5 Анкет")
 async def show_top_ratings(message: Message):
@@ -235,27 +241,31 @@ async def show_top_ratings(message: Message):
         await message.answer("Пока никто не оценил ни одну анкету. Рейтинг пуст! 🤷‍♂️")
         return
         
-    response = "🏆 **РЕЙТИНГ ЛУЧШИХ АНКЕТ БОТА** 🏆\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
+    response = "🏆 <b>РЕЙТИНГ ЛУЧШИХ АНКЕТ БОТА</b> 🏆\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
     medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
     
     for idx, profile in enumerate(top_profiles):
         tg_id, name, age, username, avg_score, votes = profile
         username_link = f"@{username}" if username and username != "сокрыт" else "нет юзернейма"
+        
+        # Полное экранирование данных пользователей от ошибок парсинга
+        safe_name = html.escape(str(name))
+        safe_username = html.escape(str(username_link))
         bar = generate_rating_bar(avg_score)
         
-        # 💎 ЭКСКЛЮЗИВНАЯ ПОМЕТКА: Внутри списка ТОП-5
+        # 💎 PREMIUM-метка в ТОП-5 (теперь внутри HTML-безопасных строк)
         if tg_id == ADMIN_ID:
             premium_tag = " ✨ [⚡ PREMIUM]"
-            response += f"{medals[idx]} **{name}, {age}**{premium_tag} ({username_link})\n"
+            response += f"{medals[idx]} <b>{safe_name}, {age}</b>{premium_tag} ({safe_username})\n"
         else:
-            response += f"{medals[idx]} **{name}, {age}** ({username_link})\n"
+            response += f"{medals[idx]} <b>{safe_name}, {age}</b> ({safe_username})\n"
             
-        response += f"┣ Средний балл: `{avg_score:.2f}` из 5\n"
+        response += f"┣ Средний балл: <code>{avg_score:.2f}</code> из 5\n"
         response += f"┣ Визуально: {bar}\n"
-        response += f"┗ Всего голосов: `{votes}`\n\n"
+        response += f"┗ Всего голосов: <code>{votes}</code>\n\n"
         
-    response += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n*Рейтинг использует умную систему взвешивания оценок.*"
-    await message.answer(response, parse_mode="Markdown")
+    response += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n*<i>Рейтинг использует умную систему взвешивания оценок.</i>"
+    await message.answer(response, parse_mode="HTML")
 
 # ==========================================
 # 📥 ЭКСПОРТ ДАННЫХ
