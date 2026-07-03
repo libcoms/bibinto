@@ -5,7 +5,8 @@ from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardB
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from fpdf import FPDF  # Библиотека fpdf2 из requirements.txt
+from aiogram.exceptions import TelegramBadRequest  # 🛡️ Импортируем защиту от ошибок Telegram
+from fpdf import FPDF
 
 from config import ADMIN_ID
 import database as db
@@ -42,14 +43,13 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🔍 Смотреть анкеты")],
         [KeyboardButton(text="👤 Моя анкета"), KeyboardButton(text="👁️ Скрыть/Показать анкету")]
     ]
-    # Если пишет админ — добавляем кнопку управления
     if user_id == ADMIN_ID:
         buttons.append([KeyboardButton(text="🔧 Панель управления")])
         
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 # ==========================================
-# 🚀БАЗОВЫЕ КОМАНДЫ И РЕГИСТРАЦИЯ
+# 🚀 БАЗОВЫЕ КОМАНДЫ И РЕГИСТРАЦИЯ
 # ==========================================
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
@@ -104,13 +104,12 @@ async def reg_photo(message: Message, state: FSMContext):
 async def send_next_profile(message: Message, user_id: int):
     profile = await db.get_random_profile(user_id)
     if not profile:
-        await message.answer("Ты посмотрел все доступные аunkеты на сегодня! Загляни позже. 😉")
+        await message.answer("Ты посмотрел все доступные анкеты на сегодня! Загляни позже. 😉")
         return
 
     p_id, p_username, p_name, p_desc, p_photo, p_age = profile
     caption = f"🔥 {p_name}, {p_age}\n\n{p_desc}"
     
-    # Кнопки оценки от 1 до 5
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="1️⃣", callback_data=f"rate_{p_id}_1"),
@@ -133,12 +132,18 @@ async def handle_rating(callback: CallbackQuery):
     _, to_id, score = callback.data.split("_")
     to_id, score = int(to_id), int(score)
     
-    # Если нажата оценка (а не кнопка пропустить)
     if score > 0:
         await db.save_rating(callback.from_user.id, to_id, score)
         
     await callback.answer("Оценка учтена!")
-    await callback.message.delete() # Удаляем старую анкету из чата
+    
+    # 🛡️ Безопасное удаление старой анкеты с защитой от двойного клика
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        # Если сообщение уже удалено предыдущим кликом — просто игнорируем ошибку
+        pass
+        
     await send_next_profile(callback.message, callback.from_user.id)
 
 # ==========================================
@@ -151,7 +156,6 @@ async def show_my_profile(message: Message):
         await message.answer("Твоя анкета не найдена. Напиши /start для регистрации.")
         return
         
-    # Структура кортежа из БД: 0:tg_id, 1:username, 2:name, 3:desc, 4:photo_id, 5:age, 6:is_active
     status = "🟢 Видима для всех" if user[6] == 1 else "🔴 Скрыта от остальных"
     caption = f"👤 **Твой профиль:**\n\nИмя: {user[2]}, {user[5]}\nО себе: {user[3]}\nСтатус: {status}"
     
@@ -169,9 +173,8 @@ async def toggle_profile_visibility(message: Message):
 async def back_to_menu(message: Message):
     await message.answer("Возвращаемся в главное меню.", reply_markup=get_main_keyboard(message.from_user.id))
 
-
 # ==========================================
-# 👑 АДМИНИСТРАТИВНАЯ ПАНЕЛЬ (Только для ADMIN_ID)
+# 👑 АДМИНИСТРАТИВНАЯ ПАНЕЛЬ
 # ==========================================
 @router.message(F.text == "🔧 Панель управления")
 async def admin_panel(message: Message):
@@ -244,14 +247,14 @@ async def show_top_ratings(message: Message):
     await message.answer(response, parse_mode="Markdown")
 
 # ==========================================
-# 📥 ЭКСПОРТ ДАННЫХ (БЕЗОПАСНО ДЛЯ PERSISTENCEMOUNT)
+# 📥 ЭКСПОРТ ДАННЫХ
 # ==========================================
 @router.message(F.text == "📥 Выгрузка таблицы (CSV)")
 async def admin_export_csv(message: Message):
     if message.from_user.id != ADMIN_ID: return
     
     users = await db.get_all_users()
-    filename = "/data/users_export.csv"  # Пишем строго в постоянную папку
+    filename = "/data/users_export.csv"
     
     with open(filename, mode="w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f, delimiter=";")
@@ -272,14 +275,12 @@ async def admin_export_pdf(message: Message):
     pdf = CyrillicPDF()
     pdf.add_page()
     
-    # 🌟 На Amvera (Linux) нет стандартных шрифтов Windows.
-    # Если ты загрузишь шрифт arial.ttf прямо в корневую папку проекта, код подтянет его.
     font_path = "arial.ttf"
     if os.path.exists(font_path):
         pdf.add_font("Arial", "", font_path, uni=True)
         pdf.set_font("Arial", size=11)
     else:
-        pdf.set_font("Helvetica", size=11) # Английский будет работать, русский без шрифта может превратиться в кракозябры
+        pdf.set_font("Helvetica", size=11)
 
     for u in users:
         tg_id, username, name, desc, age, active = u
