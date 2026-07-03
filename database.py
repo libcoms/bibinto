@@ -101,3 +101,10 @@ async def get_all_users():
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute('SELECT telegram_id, username, name, description, age, is_active FROM users') as cursor:
             return await cursor.fetchall()
+        
+async def is_bot_enabled() -> bool:
+    """Проверяет глобальный статус работы бота (включен/выключен)"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT value FROM settings WHERE key = 'bot_enabled'") as cursor:
+            res = await cursor.fetchone()
+            return res[0] == '1' if res else True
