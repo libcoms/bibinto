@@ -3,14 +3,13 @@ import aiosqlite
 from config import DB_NAME
 
 async def init_db():
-    # 1. Проверяем и создаем папку для базы данных (/data)
+    """Безопасная инициализация и автоматическая миграция структуры БД без потери данных"""
     db_dir = os.path.dirname(DB_NAME)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
 
-    # 2. Открываем АКТИВНОЕ соединение через `async with`
     async with aiosqlite.connect(DB_NAME) as db:
-        # Создаем таблицу пользователей (добавил сюда photo_id TEXT)
+        # 1. Создаем таблицу пользователей (если её не было)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id INTEGER PRIMARY KEY,
@@ -22,10 +21,8 @@ async def init_db():
                 is_active INTEGER DEFAULT 1
             )
         ''')
-        await db.commit()
         
-        # 🔥 Передвинули этот кусок вправо (внутрь async with)!
-        # Теперь он выполняется в активном подключении
+        # 2. Создаем таблицу оценок (если её не было)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS ratings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,7 +32,33 @@ async def init_db():
                 UNIQUE(from_user_id, to_user_id)
             )
         ''')
+        
+        # 3. Создаем таблицу системных настроек для рубильника
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
+        
+        # Задаем статус "Бот включен" по умолчанию при самом первом создании таблицы
+        await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('bot_enabled', '1')")
         await db.commit()
+
+        # 🔥 АВТОМАТИЧЕСКАЯ МИГРАЦИЯ ДАННЫХ
+        # Если база старая и в ней физически нет колонки photo_id, мы её аккуратно добавляем,
+        # не повреждая уже существующие строки с именами и возрастами.
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN photo_id TEXT")
+            await db.commit()
+            print("Миграция: колонка photo_id успешно добавлена в старую базу данных.")
+        except aiosqlite.OperationalError:
+            # Ошибка возникает, если колонка уже существует. Просто идем дальше.
+            pass
+
+# ==========================================
+# 👤 ПОЛЬЗОВАТЕЛЬСКАЯ ЛОГИКА
+# ==========================================
 
 async def add_user(tg_id: int, username: str, name: str, description: str, photo_id: str, age: int):
     async with aiosqlite.connect(DB_NAME) as db:
@@ -46,11 +69,11 @@ async def add_user(tg_id: int, username: str, name: str, description: str, photo
         await db.commit()
 
 async def toggle_visibility(tg_id: int) -> int:
-    """Переключает статус видимости анкеты (0 или 1). Возвращает новый статус."""
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute('SELECT is_active FROM users WHERE telegram_id = ?', (tg_id,)) as cursor:
             res = await cursor.fetchone()
-            if not res: return 1
+            if not res: 
+                return 1
             new_status = 0 if res[0] == 1 else 1
             
         await db.execute('UPDATE users SET is_active = ? WHERE telegram_id = ?', (new_status, tg_id))
@@ -59,7 +82,7 @@ async def toggle_visibility(tg_id: int) -> int:
 
 async def get_user(tg_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute('SELECT * FROM users WHERE telegram_id = ?', (tg_id,)) as cursor:
+        async with db.execute('SELECT telegram_id, username, name, description, photo_id, age, is_active FROM users WHERE telegram_id = ?', (tg_id,)) as cursor:
             return await cursor.fetchone()
 
 async def get_random_profile(current_tg_id: int):
@@ -83,10 +106,46 @@ async def save_rating(from_id: int, to_id: int, score: int):
         ''', (from_id, to_id, score))
         await db.commit()
 
-# --- АДМИН-МЕТОДЫ ---
+# ==========================================
+# 👑 АДМИНИСТРАТИВНАЯ ЛОГИКА И НАСТРОЙКИ
+# ==========================================
+
+async def is_bot_enabled() -> bool:
+    """Проверяет глобальный статус работы бота с защитой от падения при первом запуске"""
+    try:
+        async with aiosqlite.connect(DB_NAME) as db:
+            async with db.execute("SELECT value FROM settings WHERE key = 'bot_enabled'") as cursor:
+                res = await cursor.fetchone()
+                return res[0] == '1' if res else True
+    except aiosqlite.OperationalError:
+        # Если таблицы временно нет из-за параллельных процессов, считаем, что бот включен
+        return True
+
+async def toggle_bot_status() -> bool:
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT value FROM settings WHERE key = 'bot_enabled'") as cursor:
+            res = await cursor.fetchone()
+            current = res[0] == '1' if res else True
+        
+        new_status = '0' if current else '1'
+        await db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('bot_enabled', ?)", (new_status,))
+        await db.commit()
+        return new_status == '1'
+
+async def get_top_rated_profiles(limit: int = 5):
+    async with aiosqlite.connect(DB_NAME) as db:
+        query = '''
+            SELECT u.name, u.age, u.username, AVG(r.score) as avg_score, COUNT(r.score) as votes_count
+            FROM users u
+            INNER JOIN ratings r ON u.telegram_id = r.to_user_id
+            GROUP BY u.telegram_id
+            ORDER BY avg_score DESC, votes_count DESC
+            LIMIT ?
+        '''
+        async with db.execute(query, (limit,)) as cursor:
+            return await cursor.fetchall()
 
 async def get_admin_stats():
-    """Возвращает общие метрики системы"""
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute('SELECT COUNT(*) FROM users') as c:
             total_users = (await c.fetchone())[0]
@@ -97,14 +156,6 @@ async def get_admin_stats():
         return total_users, active_users, total_ratings
 
 async def get_all_users():
-    """Получает абсолютно всех пользователей для генерации отчетов"""
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute('SELECT telegram_id, username, name, description, age, is_active FROM users') as cursor:
             return await cursor.fetchall()
-        
-async def is_bot_enabled() -> bool:
-    """Проверяет глобальный статус работы бота (включен/выключен)"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT value FROM settings WHERE key = 'bot_enabled'") as cursor:
-            res = await cursor.fetchone()
-            return res[0] == '1' if res else True
