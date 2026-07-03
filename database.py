@@ -10,29 +10,32 @@ async def init_db():
 
     # 2. Открываем АКТИВНОЕ соединение через `async with`
     async with aiosqlite.connect(DB_NAME) as db:
+        # Создаем таблицу пользователей (добавил сюда photo_id TEXT)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id INTEGER PRIMARY KEY,
                 username TEXT,
                 name TEXT,
                 description TEXT,
+                photo_id TEXT,
                 age INTEGER,
                 is_active INTEGER DEFAULT 1
             )
         ''')
-        # После выполнения SQL-запросов, меняющих структуру или данные, 
-        # обязательно делаем commit, чтобы сохранить изменения
         await db.commit()
-    await db.execute('''
-        CREATE TABLE IF NOT EXISTS ratings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            from_user_id INTEGER,
-            to_user_id INTEGER,
-            score INTEGER,
-            UNIQUE(from_user_id, to_user_id)
-        )
-    ''')
-    await db.commit()
+        
+        # 🔥 Передвинули этот кусок вправо (внутрь async with)!
+        # Теперь он выполняется в активном подключении
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS ratings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_user_id INTEGER,
+                to_user_id INTEGER,
+                score INTEGER,
+                UNIQUE(from_user_id, to_user_id)
+            )
+        ''')
+        await db.commit()
 
 async def add_user(tg_id: int, username: str, name: str, description: str, photo_id: str, age: int):
     async with aiosqlite.connect(DB_NAME) as db:
