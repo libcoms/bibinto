@@ -205,9 +205,8 @@ async def admin_export_csv(message: Message):
     if message.from_user.id != ADMIN_ID: return
     
     users = await db.get_all_users()
-    filename = "users_export.csv"
+    filename = "/data/users_export.csv"  # 🔥 Пишем строго в persistenceMount
     
-    # Генерируем CSV таблицу стандартными средствами Python (Excel откроет без проблем)
     with open(filename, mode="w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f, delimiter=";")
         writer.writerow(["Telegram ID", "Username", "Имя", "Описание", "Возраст", "Активен (1/0)"])
@@ -215,7 +214,10 @@ async def admin_export_csv(message: Message):
             writer.writerow(u)
             
     await message.answer_document(document=FSInputFile(filename), caption="📊 Таблица всех пользователей выгружена!")
-    os.remove(filename)
+    
+    # Безопасное удаление временного файла
+    if os.path.exists(filename):
+        os.remove(filename)
 
 @router.message(F.text == "📄 Экспорт всех анкет в PDF")
 async def admin_export_pdf(message: Message):
@@ -227,7 +229,6 @@ async def admin_export_pdf(message: Message):
     pdf = CyrillicPDF()
     pdf.add_page()
     
-    # Подгружаем шрифт для отображения кириллицы
     font_path = r"C:\Windows\Fonts\arial.ttf"
     if os.path.exists(font_path):
         pdf.add_font("Arial", "", font_path)
@@ -238,19 +239,18 @@ async def admin_export_pdf(message: Message):
     for u in users:
         tg_id, username, name, desc, age, active = u
         act_str = "Активен" if active == 1 else "Скрыт"
-        
-        # Рендерим блок данных для каждого юзера
         text_block = f"ID: {tg_id} | @{username} | {name}, {age} л. ({act_str})\n"
         if desc:
             text_block += f"Описание: {desc}\n"
         text_block += "-" * 50 + "\n"
-        
-        # multi_cell отлично переносит длинные строки
         pdf.multi_cell(0, 7, text_block)
         pdf.ln(2)
         
-    filename = "profiles_report.pdf"
+    filename = "/data/profiles_report.pdf"  # 🔥 Пишем строго в persistenceMount
     pdf.output(filename)
     
     await message.answer_document(document=FSInputFile(filename), caption="📄 PDF-отчет со всеми анкетами готов!")
-    os.remove(filename)
+    
+    # Безопасное удаление временного файла
+    if os.path.exists(filename):
+        os.remove(filename)

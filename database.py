@@ -1,29 +1,35 @@
+import os
 import aiosqlite
 from config import DB_NAME
 
 async def init_db():
+    # 🔥 Автоматически создаем папку для БД, если её нет (например, при локальных тестах)
+    db_dir = os.path.dirname(DB_NAME)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id INTEGER PRIMARY KEY,
                 username TEXT,
                 name TEXT,
-                description TEXT,    -- <-- Новое поле
+                description TEXT,
                 photo_id TEXT,
                 age INTEGER,
                 is_active INTEGER DEFAULT 1
             )
         ''')
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS ratings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                from_user_id INTEGER,
-                to_user_id INTEGER,
-                score INTEGER,
-                UNIQUE(from_user_id, to_user_id)
-            )
-        ''')
-        await db.commit()
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS ratings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_user_id INTEGER,
+            to_user_id INTEGER,
+            score INTEGER,
+            UNIQUE(from_user_id, to_user_id)
+        )
+    ''')
+    await db.commit()
 
 async def add_user(tg_id: int, username: str, name: str, description: str, photo_id: str, age: int):
     async with aiosqlite.connect(DB_NAME) as db:
