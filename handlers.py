@@ -288,14 +288,17 @@ async def show_admin_stats(message: Message):
     await message.answer(text, parse_mode="HTML")
 
 # ==========================================
-# 📥 ЭКСПОРТ ДАННЫХ
+# 📥 ЭКСПОРТ ДАННЫХ (ИСПРАВЛЕНО ДЛЯ /data)
 # ==========================================
 @router.message(F.text == "📥 Выгрузка таблицы (CSV)")
 async def admin_export_csv(message: Message):
     if message.from_user.id != ADMIN_ID: return
     
     users = await db.get_all_users()
-    filename = "users_export.csv"
+    
+    # Определяем безопасную директорию (проверяем существование /data)
+    export_dir = "/data" if os.path.exists("/data") else "."
+    filename = os.path.join(export_dir, "users_export.csv")
     
     with open(filename, mode="w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f, delimiter=";")
@@ -332,7 +335,10 @@ async def admin_export_pdf(message: Message):
         pdf.multi_cell(0, 7, text_block)
         pdf.ln(2)
         
-    filename = "profiles_report.pdf"
+    # Определяем безопасную директорию (проверяем существование /data)
+    export_dir = "/data" if os.path.exists("/data") else "."
+    filename = os.path.join(export_dir, "profiles_report.pdf")
+    
     pdf.output(filename)
     
     await message.answer_document(document=FSInputFile(filename), caption="📄 PDF-отчет со всеми анкетами готов!")
